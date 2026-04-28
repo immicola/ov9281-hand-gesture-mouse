@@ -35,3 +35,8 @@ test.*
 
 # OpenCV
 opencv_*.png
+
+#
+camera_server.py
+gesture_client.py
+hand_gesture_ov9281
