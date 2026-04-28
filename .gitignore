@@ -1,0 +1,37 @@
+# Python
+venv/
+gesture_venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.yuv
+*.jpeg
+*.jpg
+*.png
+snap_*.png
+test.*
+
+# OpenCV
+opencv_*.png

@@ -1,0 +1,6 @@
+evdev
+opencv-python
+mediapipe
+numpy
+# picamera2 не включён, так как используется rpicam-vid через subprocess
+# Python 3.12 требуется для совместимости с системой
