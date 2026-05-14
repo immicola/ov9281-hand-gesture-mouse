@@ -11,31 +11,36 @@ import threading
 import queue
 import serial
 import time
-from collections import deque
+from collections import deque, Counter
 
 FRAME_W = 640
 FRAME_H = 480
 FRAME_SIZE = (FRAME_W * FRAME_H * 3) // 2
 
-MIN_DETECT = 0.7
-MIN_TRACK = 0.5
+MIN_DETECT = 0.65
+MIN_TRACK = 0.45
 GESTURE_FRAMES = 3
-PROCESS_EVERY_N = 2
 
 SERIAL_PORT = "/dev/serial0"
 SERIAL_BAUD = 115200
-CMD_THROTTLE = 0.5
+CMD_THROTTLE = 0.25
+X_THROTTLE = 0.05
+DEAD_ZONE = 0.04
 
+JOINT_GESTURES = ("LIKE", "TWO", "FOUR")
+
+print("Запуск rpicam-vid (YUV420)...")
 proc = subprocess.Popen([
     "rpicam-vid",
     "--width", str(FRAME_W),
     "--height", str(FRAME_H),
-    "--framerate", "15",
+    "--framerate", "30",
     "--nopreview",
     "--codec", "yuv420",
     "-t", "0",
     "--output", "-"
 ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+print(f"rpicam-vid запущен ({FRAME_W}x{FRAME_H})")
 
 fq = queue.Queue(maxsize=2)
 
@@ -63,59 +68,57 @@ def _reader():
     except: pass
 
 threading.Thread(target=_reader, daemon=True).start()
+print("Ждём первый кадр...")
 
 pico = None
 try:
     pico = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=0.01)
     print(f"UART: connected to Pico on {SERIAL_PORT}")
 except Exception as e:
-    print(f"UART: failed ({e}) — running in preview mode")
+    print(f"UART: failed ({e}) — preview mode")
 
-def send_gesture(name):
+def send_raw(line):
     if pico:
         try:
-            pico.write(f"GEST:{name}\n".encode())
+            pico.write((line + "\n").encode())
+            pico.flush()
             return True
         except Exception as e:
-            print(f"UART write error: {e}")
+            print(f"UART error: {e}")
             return False
     return False
 
 def dist(a, b):
     return math.hypot(a.x - b.x, a.y - b.y)
 
+def palm_center(lm):
+    idx = (0, 1, 5, 9, 13, 17)
+    return (sum(lm[i].x for i in idx) / 6,
+            sum(lm[i].y for i in idx) / 6)
+
 def finger_extended(lm, tip_idx, pip_idx):
     tip = lm[tip_idx]
     pip = lm[pip_idx]
     mcp = lm[tip_idx - 3]
     wrist = lm[0]
-    if tip.y >= pip.y:
+    d_tip_wrist = dist(tip, wrist)
+    d_pip_wrist = dist(pip, wrist)
+    if d_tip_wrist < d_pip_wrist * 1.08:
         return False
-    if dist(tip, wrist) < dist(pip, wrist) * 1.08:
-        return False
-    if dist(tip, mcp) < dist(pip, mcp) * 1.05:
+    d_tip_mcp = dist(tip, mcp)
+    d_pip_mcp = dist(pip, mcp)
+    if d_tip_mcp < d_pip_mcp * 1.05:
         return False
     return True
 
 def thumb_extended(lm, hand_label):
-    t, ip, mcp = lm[4], lm[3], lm[2]
+    t, ip = lm[4], lm[3]
     wrist = lm[0]
-    if dist(t, wrist) < dist(ip, wrist) * 1.08:
+    d_t_w = dist(t, wrist)
+    d_ip_w = dist(ip, wrist)
+    if d_t_w < d_ip_w * 1.08:
         return False
-    pcx = (lm[0].x + lm[5].x + lm[9].x) / 3
-    if abs(t.x - pcx) > 0.08 and dist(t, lm[5]) > dist(ip, lm[5]) * 1.15:
-        return True
-    if (t.y < ip.y - 0.03 and
-        dist(t, wrist) > dist(ip, wrist) * 1.2 and
-        dist(t, wrist) > dist(mcp, wrist) * 1.15):
-        return True
-    if hand_label == 'Right':
-        if t.x + 0.01 < ip.x and dist(t, lm[5]) > dist(ip, lm[5]) * 1.1:
-            return True
-    else:
-        if t.x > ip.x + 0.01 and dist(t, lm[5]) > dist(ip, lm[5]) * 1.1:
-            return True
-    return False
+    return d_t_w > d_ip_w * 1.2
 
 def count_fingers(lm, hand_label):
     ext = {'T': False, 'I': False, 'M': False, 'R': False, 'P': False}
@@ -135,7 +138,7 @@ def classify_gesture(count, ext):
         return "UNKNOWN"
     if count == 2 and ext.get('I') and ext.get('M'):
         return "TWO"
-    if count == 3:
+    if count == 3 and ext.get('I') and ext.get('M') and ext.get('R') and not ext.get('P') and not ext.get('T'):
         return "THREE"
     if count == 4 and not ext.get('T'):
         return "FOUR"
@@ -155,6 +158,57 @@ _GESTURE_COLORS = {
     "NO HAND": (80, 80, 80),
 }
 
+JOINT_LABELS = {"LIKE": "J1 rotation", "TWO": "J2 shoulder", "FOUR": "J3 elbow"}
+JOINT_COLORS = {"LIKE": (0, 200, 255), "TWO": (0, 255, 128), "FOUR": (0, 180, 255)}
+JOINT_RANGES = {"LIKE": (-2.967, 2.967), "TWO": (-1.57, 1.57), "FOUR": (-1.57, 1.57)}
+
+def draw_joystick(frame, label, px):
+    h, w = frame.shape[:2]
+    cx = w - 90
+    cy = h // 2
+    dz = 18
+    mz = 60
+
+    cv2.putText(frame, label, (cx - 40, cy - mz - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
+    cv2.circle(frame, (cx, cy), mz, (80, 80, 80), 1)
+    cv2.circle(frame, (cx, cy), dz, (120, 120, 120), 1)
+    cv2.line(frame, (cx - mz, cy), (cx + mz, cy), (60, 60, 60), 1)
+    cv2.putText(frame, "−", (cx - mz - 14, cy + 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120, 120, 120), 1)
+    cv2.putText(frame, "+", (cx + mz + 4, cy + 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120, 120, 120), 1)
+
+    off = (px - 0.5) * 2
+    hx = int(cx + off * mz)
+    hx = max(cx - mz, min(cx + mz, hx))
+    color = JOINT_COLORS.get(label, (0, 255, 255))
+
+    cv2.line(frame, (cx, cy), (hx, cy), color, 2)
+    cv2.circle(frame, (hx, cy), 10, color, -1)
+    cv2.circle(frame, (hx, cy), 10, (255, 255, 255), 2)
+
+    arrow = "\u2192" if off > DEAD_ZONE else ("\u2190" if off < -DEAD_ZONE else "\u00b7")
+    cv2.putText(frame, f"{arrow}  {off:+.2f}", (cx - 18, cy + mz + 24),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+    cv2.putText(frame, f"X:{px:.2f}", (cx - 18, cy + mz + 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (120, 120, 120), 1)
+
+def draw_gripper_indicator(frame, state):
+    h, w = frame.shape[:2]
+    x0 = w - 130
+    y0 = h - 50
+    x1 = w - 20
+    color = (0, 200, 0) if state == "OPEN" else (200, 100, 0)
+    pct = 1.0 if state == "OPEN" else 0.0
+    fw = x1 - x0
+    filled = int(fw * pct)
+    cv2.rectangle(frame, (x0, y0), (x1, y0 + 12), (80, 80, 80), 1)
+    cv2.rectangle(frame, (x0, y0), (x0 + filled, y0 + 12), color, -1)
+    cv2.putText(frame, f"GRIP {state}", (x0 - 10, y0 - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+
 def main():
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
@@ -168,13 +222,16 @@ def main():
 
     gest_hist = deque(maxlen=GESTURE_FRAMES)
     stable_gest = "NO HAND"
-    last_sent = ""
-    last_send_t = 0.0
-    send_ok = False
-    frame_idx = 0
-    last_res = None
+    last_sent_gest = ""
+    last_gest_t = 0.0
+    last_x_t = 0.0
+    smooth_px = 0.5
 
-    print("Robo Arm Gesture → Thor Controller. Press 'q' to quit.\n")
+    WIN_NAME = "Robo Arm Gesture - Thor"
+    cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
+    first_frame = True
+
+    print("Ready! Gestures active. 'q' to quit.\n")
 
     while True:
         try:
@@ -183,17 +240,18 @@ def main():
             print("Frame timeout")
             continue
 
+        if first_frame:
+            print("Первый кадр получен!")
+            first_frame = False
+
         gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         frame = cv2.flip(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), 1)
 
-        frame_idx += 1
-        if frame_idx % PROCESS_EVERY_N == 0:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb.flags.writeable = False
-            last_res = hands.process(rgb)
-            rgb.flags.writeable = True
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        res = hands.process(rgb)
+        rgb.flags.writeable = True
 
-        res = last_res
         lbl = "NO HAND"
         color = _GESTURE_COLORS["NO HAND"]
         now = time.monotonic()
@@ -209,22 +267,25 @@ def main():
 
             gest_hist.append(raw)
             if len(gest_hist) >= GESTURE_FRAMES:
-                if all(g == raw for g in gest_hist):
-                    stable_gest = raw
-            else:
-                stable_gest = raw
+                top = Counter(gest_hist).most_common(1)[0]
+                if top[1] >= 2:
+                    stable_gest = top[0]
 
             lbl = stable_gest
             color = _GESTURE_COLORS.get(lbl, (180, 180, 180))
 
-            if lbl != last_sent and lbl not in ("NO HAND", "UNKNOWN") and now - last_send_t > CMD_THROTTLE:
-                send_ok = send_gesture(lbl)
-                if send_ok:
-                    print(f">>> {lbl}")
-                    last_sent = lbl
-                    last_send_t = now
-                else:
-                    print(f"FAIL: {lbl}")
+            px, py = palm_center(lm)
+            smooth_px = smooth_px * 0.6 + px * 0.4
+
+            if lbl != last_sent_gest and lbl not in ("NO HAND", "UNKNOWN") and now - last_gest_t > CMD_THROTTLE:
+                send_raw(f"GEST:{lbl}")
+                print(f">>> {lbl}")
+                last_sent_gest = lbl
+                last_gest_t = now
+
+            if lbl in JOINT_GESTURES and now - last_x_t > X_THROTTLE:
+                send_raw(f"X:{smooth_px:.3f}")
+                last_x_t = now
 
             h, w = frame.shape[:2]
             cx = int(lm[0].x * w)
@@ -232,29 +293,42 @@ def main():
             cv2.circle(frame, (cx, cy), 8, (0, 255, 0), 2)
 
             fl = [k for k, v in ext.items() if v]
+
             cv2.putText(frame, f"Fingers: {n} [{','.join(fl)}]",
                         (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
-            cv2.putText(frame, f"Stable: {stable_gest}",
+            cv2.putText(frame, f"Raw:{raw} Stable:{lbl}",
                         (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
-        else:
-            if frame_idx % PROCESS_EVERY_N == 0:
-                gest_hist.clear()
-                stable_gest = "NO HAND"
 
-        # HUD: status line
-        if pico:
-            status = f"UART OK  Last: {last_sent}"
-            sc = (0, 200, 0)
+            if lbl in JOINT_LABELS:
+                draw_joystick(frame, JOINT_LABELS[lbl], smooth_px)
+            elif lbl == "FIST":
+                draw_gripper_indicator(frame, "CLOSE")
+            elif lbl == "FIVE":
+                draw_gripper_indicator(frame, "OPEN")
+
+            hand_label = hd
+            for tip_id, name in [(4, "T"), (8, "I"), (12, "M"), (16, "R"), (20, "P")]:
+                color_t = (0, 255, 0) if ext.get(name) else (0, 0, 200)
+                tp = (int(lm[tip_id].x * w), int(lm[tip_id].y * h))
+                cv2.circle(frame, tp, 6, color_t, -1)
+
+            off = (smooth_px - 0.5) * 2
+            cv2.putText(frame, f"px:{lm[9].x:.2f} sm:{smooth_px:.2f} off:{off:+.2f}",
+                        (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (100, 200, 100), 1)
+
         else:
-            status = "UART OFF (preview mode)"
-            sc = (0, 100, 200)
-        cv2.putText(frame, status, (10, 95),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, sc, 1)
+            gest_hist.clear()
+            stable_gest = "NO HAND"
+
+        status = "UART OK" if pico else "PREVIEW"
+        cv2.putText(frame, f"{status}  Sent: {last_sent_gest}",
+                    (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    (0, 200, 0) if pico else (0, 100, 200), 1)
 
         cv2.putText(frame, f"Gesture: {lbl}",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-        cv2.imshow("Robo Arm → Thor via Pico", frame)
+        cv2.imshow(WIN_NAME, frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 

@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-thor_bridge.py — Pico USB serial → Thor-ROS via rosbridge WebSocket
-
-Usage:
-  python3 thor_bridge.py /dev/ttyACM0        # default port
-  python3 thor_bridge.py /dev/ttyACM0 --host localhost --port 9090
-
-Runs in WSL2 alongside Thor-ROS.
-Needs Pico USB serial forwarded via usbipd.
-"""
-
 import sys
 import json
 import struct
@@ -19,25 +8,41 @@ import socket
 import os
 import time
 import threading
+import math
 
 ROSBRIDGE_HOST = "localhost"
 ROSBRIDGE_PORT = 9090
 RECONNECT_DELAY = 3.0
 
-# Gesture → [joint1..joint6 (rad), gripper (rad)]
-# Joint limits: j1/j4/j6 ±2.967, j2/j3/j5 ±1.57, gripper -1.57..0
-GESTURE_POSES = {
-    "LIKE":  ([0.0, 0.8, -1.5, 0.0, 0.3, 0.0],  0.0),
-    "FIVE":  ([0.0, 0.5, -1.2, 0.0, -0.3, 0.0], 0.0),
-    "FIST":  ([0.0, 0.5, -1.2, 0.0, -0.3, 0.0], -1.2),
-    "ONE":   ([0.0, 0.3, -0.3, 0.0, -1.2, 0.0], 0.0),
-    "TWO":   ([1.2, 0.5, -1.0, 0.5, -0.5, 0.0], 0.0),
+HOME = [0.0, 0.8, -1.5, 0.0, 0.3, 0.0]
+GRIP_OPEN = 0.0
+GRIP_CLOSE = -1.2
+
+JOINT_RANGES = [
+    (-2.967, 2.967),
+    (-1.57, 1.57),
+    (-1.57, 1.57),
+]
+
+GESTURE_JOINT_MAP = {
+    "LIKE": 0,
+    "TWO": 1,
+    "FOUR": 2,
 }
 
-TOPIC = "/joint_group_position_controller/command"
-ADVERTISE_DONE = threading.Event()
-ADVERTISE_DONE.set()
+DEAD_ZONE = 0.04
+MAX_DIST = 0.25
+JOYSTICK_GAIN = 0.5
+PUBLISH_THROTTLE = 0.04
 
+TOPIC = "/joint_group_position_controller/command"
+
+current_joints = list(HOME)
+current_gripper = GRIP_OPEN
+active_joint = -1
+lock = threading.Lock()
+
+_TIMEOUT = object()
 
 class WSClient:
     def __init__(self):
@@ -48,7 +53,6 @@ class WSClient:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(10)
         self.sock.connect((host, port))
-
         key = base64.b64encode(os.urandom(16)).decode()
         req = (
             f"GET / HTTP/1.1\r\n"
@@ -60,18 +64,15 @@ class WSClient:
             f"\r\n"
         )
         self.sock.sendall(req.encode())
-
         resp = b""
         while b"\r\n\r\n" not in resp:
             chunk = self.sock.recv(4096)
             if not chunk:
                 raise ConnectionError("Handshake failed")
             resp += chunk
-
         if b"101" not in resp.split(b"\r\n")[0]:
             raise ConnectionError(f"Bad handshake: {resp[:200]}")
-
-        self.sock.settimeout(None)
+        self.sock.settimeout(0.2)
         self.buf = b""
         print(f"  WS connected to {host}:{port}")
 
@@ -96,53 +97,48 @@ class WSClient:
     def recv(self):
         while True:
             if len(self.buf) < 2:
-                self.buf += self._recv_n(2 - len(self.buf))
+                try:
+                    self.buf += self.sock.recv(4096)
+                except socket.timeout:
+                    return _TIMEOUT
+                if not self.buf:
+                    return None
             opcode = self.buf[0] & 0x0F
             masked = self.buf[1] & 0x80
             length = self.buf[1] & 0x7F
             offset = 2
-
             if length == 126:
                 while len(self.buf) < offset + 2:
-                    self.buf += self._recv_n(1)
+                    self.buf += self.sock.recv(1)
                 length = struct.unpack(">H", self.buf[offset:offset+2])[0]
                 offset += 2
             elif length == 127:
                 while len(self.buf) < offset + 8:
-                    self.buf += self._recv_n(1)
+                    self.buf += self.sock.recv(1)
                 length = struct.unpack(">Q", self.buf[offset:offset+8])[0]
                 offset += 8
-
             if masked:
                 while len(self.buf) < offset + 4:
-                    self.buf += self._recv_n(1)
+                    self.buf += self.sock.recv(1)
                 mask = self.buf[offset:offset+4]
                 offset += 4
-
             while len(self.buf) < offset + length:
-                self.buf += self._recv_n(1)
-
+                self.buf += self.sock.recv(1)
             payload = self.buf[offset:offset+length]
             self.buf = self.buf[offset+length:]
-
             if masked:
                 payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-
             if opcode == 0x8:
                 return None
             if opcode == 0x9:
-                self.sock.sendall(bytes([0x8A, 0x00]))
+                try:
+                    self.sock.sendall(bytes([0x8A, 0x00]))
+                except:
+                    pass
                 continue
             if opcode == 0xA:
                 continue
             return payload.decode("utf-8")
-
-    def _recv_n(self, n):
-        while True:
-            chunk = self.sock.recv(max(n, 4096))
-            if not chunk:
-                raise ConnectionError("Connection closed")
-            return chunk
 
     def close(self):
         if self.sock:
@@ -154,43 +150,81 @@ class WSClient:
             self.sock = None
 
 
-def advertise_topic(ws):
-    ws.send_text(json.dumps({
-        "op": "advertise",
-        "topic": TOPIC,
-        "type": "std_msgs/Float64MultiArray"
-    }))
-    ADVERTISE_DONE.set()
-    print(f"  Advertised {TOPIC}")
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
 
-def send_pose(ws, gesture_name):
-    pose = GESTURE_POSES.get(gesture_name)
-    if not pose:
-        print(f"  Unknown gesture: {gesture_name}")
-        return False
-
-    joints, gripper = pose
-    msg = {
-        "op": "publish",
-        "topic": TOPIC,
-        "msg": {
-            "data": list(joints) + [gripper]
-        }
-    }
+def publish_joints(ws):
+    with lock:
+        data = list(current_joints) + [current_gripper]
+    msg = {"op": "publish", "topic": TOPIC, "msg": {"data": data}}
     ws.send_text(json.dumps(msg))
-    deg = [f"{math.degrees(j):.0f}" for j in joints] + [f"{math.degrees(gripper):.0f}"]
-    print(f"  >>> {gesture_name}  →  [{', '.join(deg)}] deg")
-    return True
 
 
-def serial_reader(port, ws):
+def handle_gesture(name):
+    global active_joint, current_gripper
+    if name in GESTURE_JOINT_MAP:
+        active_joint = GESTURE_JOINT_MAP[name]
+        print(f"  Joint selected: {name} → J{active_joint + 1}")
+    elif name == "FIST":
+        with lock:
+            current_gripper = GRIP_CLOSE
+        print(f"  GRIP CLOSE")
+    elif name == "FIVE":
+        with lock:
+            current_gripper = GRIP_OPEN
+        print(f"  GRIP OPEN")
+    else:
+        print(f"  Ignored gesture: {name}")
+
+
+def handle_x(value):
+    offset = value - 0.5
+    dist = abs(offset)
+    if dist < DEAD_ZONE:
+        return
+    j = active_joint
+    if j < 0:
+        return
+    t = min((dist - DEAD_ZONE) / (MAX_DIST - DEAD_ZONE), 1.0)
+    speed = t * t * JOYSTICK_GAIN
+    delta = speed if offset > 0 else -speed
+    mn, mx = JOINT_RANGES[j]
+    with lock:
+        current_joints[j] = clamp(current_joints[j] + delta, mn, mx)
+
+
+def ws_worker(ws, host, port):
+    while True:
+        try:
+            ws.connect(host, port)
+            ws.send_text(json.dumps({
+                "op": "advertise",
+                "topic": TOPIC,
+                "type": "std_msgs/Float64MultiArray"
+            }))
+            print(f"  Advertised {TOPIC}")
+            last_pub = 0
+            while True:
+                msg = ws.recv()
+                if msg is None:
+                    break
+                now = time.monotonic()
+                if now - last_pub > PUBLISH_THROTTLE:
+                    publish_joints(ws)
+                    last_pub = now
+        except Exception as e:
+            print(f"  WS error: {e}")
+        print(f"  Reconnecting in {RECONNECT_DELAY}s...")
+        time.sleep(RECONNECT_DELAY)
+
+
+def serial_reader(port):
     import serial
     while True:
         try:
             ser = serial.Serial(port, 115200, timeout=0.1)
             print(f"Serial: opened {port}")
-            ADVERTISE_DONE.wait()
             buf = ""
             while True:
                 data = ser.read(64)
@@ -200,8 +234,12 @@ def serial_reader(port, ws):
                         line, buf = buf.split("\n", 1)
                         line = line.strip()
                         if line.startswith("GEST:"):
-                            gesture = line[5:]
-                            send_pose(ws, gesture)
+                            handle_gesture(line[5:])
+                        elif line.startswith("X:"):
+                            try:
+                                handle_x(float(line[2:]))
+                            except:
+                                pass
         except serial.SerialException as e:
             print(f"Serial error: {e}")
         except Exception as e:
@@ -209,26 +247,7 @@ def serial_reader(port, ws):
         time.sleep(2)
 
 
-def ws_reconnector(ws, host, port):
-    while True:
-        try:
-            ws.connect(host, port)
-            advertise_topic(ws)
-            while True:
-                msg = ws.recv()
-                if msg is None:
-                    break
-        except Exception as e:
-            print(f"WS error: {e}")
-        print(f"  Reconnecting in {RECONNECT_DELAY}s...")
-        time.sleep(RECONNECT_DELAY)
-
-
 def main():
-    import math as _m
-    global math
-    math = _m
-
     if len(sys.argv) < 2:
         print("Usage: thor_bridge.py <serial_port> [--host HOST] [--port PORT]")
         print("  Example: thor_bridge.py /dev/ttyACM0")
@@ -237,7 +256,6 @@ def main():
     port = sys.argv[1]
     host = ROSBRIDGE_HOST
     rport = ROSBRIDGE_PORT
-
     i = 2
     while i < len(sys.argv):
         if sys.argv[i] == "--host" and i + 1 < len(sys.argv):
@@ -249,16 +267,20 @@ def main():
         else:
             i += 1
 
-    print(f"Thor Bridge")
+    print("Thor Bridge (Joystick Mode)")
     print(f"  Serial port: {port}")
     print(f"  Rosbridge:   {host}:{rport}")
     print(f"  Topic:       {TOPIC}")
-    print(f"  Gestures:    {', '.join(GESTURE_POSES.keys())}")
+    print(f"  LIKE → J1 (base),     palm ← → joint ← −")
+    print(f"  TWO  → J2 (shoulder), palm ← → joint ← −")
+    print(f"  FOUR → J3 (elbow),    palm ← → joint ← −")
+    print(f"  FIST → gripper close")
+    print(f"  FIVE → gripper open")
     print()
 
     ws = WSClient()
-    threading.Thread(target=ws_reconnector, args=(ws, host, rport), daemon=True).start()
-    threading.Thread(target=serial_reader, args=(port, ws), daemon=True).start()
+    threading.Thread(target=ws_worker, args=(ws, host, rport), daemon=True).start()
+    threading.Thread(target=serial_reader, args=(port,), daemon=True).start()
 
     try:
         while True:
