@@ -23,8 +23,8 @@ GESTURE_FRAMES = 3
 
 SERIAL_PORT = "/dev/serial0"
 SERIAL_BAUD = 115200
-CMD_THROTTLE = 0.5
-X_THROTTLE = 0.1
+CMD_THROTTLE = 0.15
+X_THROTTLE = 0.03
 DEAD_ZONE = 0.04
 
 JOINT_GESTURES = ("LIKE", "TWO", "FOUR")
@@ -232,7 +232,6 @@ def main():
     last_gest_t = 0.0
     last_x_t = 0.0
     smooth_px = 0.5
-    frame_idx = 0
     last_res = None
     first_frame = True
 
@@ -252,12 +251,10 @@ def main():
         gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         frame = cv2.flip(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), 1)
 
-        frame_idx += 1
-        if frame_idx % 2 == 0:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb.flags.writeable = False
-            last_res = hands.process(rgb)
-            rgb.flags.writeable = True
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        last_res = hands.process(rgb)
+        rgb.flags.writeable = True
 
         res = last_res
         lbl = "NO HAND"
@@ -314,9 +311,8 @@ def main():
                 draw_gripper_indicator(frame, "OPEN")
 
         else:
-            if frame_idx % 2 == 0:
-                gest_hist.clear()
-                stable_gest = "NO HAND"
+            gest_hist.clear()
+            stable_gest = "NO HAND"
 
         uart_status = "UART OK" if pico else "PREVIEW"
         cv2.putText(frame, f"{uart_status}  Sent: {last_sent}",

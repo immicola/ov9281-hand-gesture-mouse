@@ -11,4 +11,3 @@ while True:
         data = uart.read(64)
         if data:
             serial.write(data)
-    time.sleep(0.005)

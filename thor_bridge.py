@@ -33,7 +33,7 @@ GESTURE_JOINT_MAP = {
 DEAD_ZONE = 0.04
 MAX_DIST = 0.25
 JOYSTICK_GAIN = 0.5
-PUBLISH_THROTTLE = 0.04
+PUBLISH_THROTTLE = 0.01
 
 TOPIC = "/joint_group_position_controller/command"
 
@@ -41,6 +41,7 @@ current_joints = list(HOME)
 current_gripper = GRIP_OPEN
 active_joint = -1
 lock = threading.Lock()
+changed_event = threading.Event()
 
 _TIMEOUT = object()
 
@@ -72,7 +73,7 @@ class WSClient:
             resp += chunk
         if b"101" not in resp.split(b"\r\n")[0]:
             raise ConnectionError(f"Bad handshake: {resp[:200]}")
-        self.sock.settimeout(0.2)
+        self.sock.settimeout(0.01)
         self.buf = b""
         print(f"  WS connected to {host}:{port}")
 
@@ -165,14 +166,17 @@ def handle_gesture(name):
     global active_joint, current_gripper
     if name in GESTURE_JOINT_MAP:
         active_joint = GESTURE_JOINT_MAP[name]
+        changed_event.set()
         print(f"  Joint selected: {name} → J{active_joint + 1}")
     elif name == "FIST":
         with lock:
             current_gripper = GRIP_CLOSE
+        changed_event.set()
         print(f"  GRIP CLOSE")
     elif name == "FIVE":
         with lock:
             current_gripper = GRIP_OPEN
+        changed_event.set()
         print(f"  GRIP OPEN")
     else:
         print(f"  Ignored gesture: {name}")
@@ -192,6 +196,7 @@ def handle_x(value):
     mn, mx = JOINT_RANGES[j]
     with lock:
         current_joints[j] = clamp(current_joints[j] + delta, mn, mx)
+    changed_event.set()
 
 
 def ws_worker(ws, host, port):
@@ -206,9 +211,14 @@ def ws_worker(ws, host, port):
             print(f"  Advertised {TOPIC}")
             last_pub = 0
             while True:
-                msg = ws.recv()
-                if msg is None:
-                    break
+                changed_event.wait(timeout=0.02)
+                changed_event.clear()
+                while True:
+                    msg = ws.recv()
+                    if msg is _TIMEOUT:
+                        break
+                    if msg is None:
+                        raise ConnectionError("WS closed")
                 now = time.monotonic()
                 if now - last_pub > PUBLISH_THROTTLE:
                     publish_joints(ws)
@@ -223,7 +233,7 @@ def serial_reader(port):
     import serial
     while True:
         try:
-            ser = serial.Serial(port, 115200, timeout=0.1)
+            ser = serial.Serial(port, 115200, timeout=0.01)
             print(f"Serial: opened {port}")
             buf = ""
             while True:
