@@ -25,7 +25,7 @@ JOINT_RANGES = [
 ]
 
 GESTURE_JOINT_MAP = {
-    "LIKE": 0,
+    "THREE": 0,
     "TWO": 1,
     "FOUR": 2,
 }
@@ -281,9 +281,9 @@ def main():
     print(f"  Serial port: {port}")
     print(f"  Rosbridge:   {host}:{rport}")
     print(f"  Topic:       {TOPIC}")
-    print(f"  LIKE → J1 (base),     palm ← → joint ← −")
-    print(f"  TWO  → J2 (shoulder), palm ← → joint ← −")
-    print(f"  FOUR → J3 (elbow),    palm ← → joint ← −")
+    print(f"  THREE → J1 (base),     palm ← → joint ← −")
+    print(f"  TWO   → J2 (shoulder), palm ← → joint ← −")
+    print(f"  FOUR  → J3 (elbow),    palm ← → joint ← −")
     print(f"  FIST → gripper close")
     print(f"  FIVE → gripper open")
     print()

@@ -1,3 +1,5 @@
+давай этот в robo_arm_v2.py поменяем жест управления с лайка на три пальца, уберем жест лайк. и в thor_bridge тоже правки внесем
+
 We are optimizing latency for a Thor robot arm controlled via gesture recognition.
 ## Current setup
 - Raspberry Pi 4 (OV9281 camera) runs `robo_arm_v2.py` — MediaPipe gesture → UART → Pico → USB → WSL

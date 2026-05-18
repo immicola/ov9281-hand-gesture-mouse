@@ -27,7 +27,7 @@ CMD_THROTTLE = 0.15
 X_THROTTLE = 0.03
 DEAD_ZONE = 0.04
 
-JOINT_GESTURES = ("LIKE", "TWO", "FOUR")
+JOINT_GESTURES = ("THREE", "TWO", "FOUR")
 
 print("Запуск rpicam-vid (YUV420)...")
 proc = subprocess.Popen([
@@ -144,7 +144,6 @@ def classify_gesture(count, ext):
     if count == 0:
         return "FIST"
     if count == 1:
-        if ext.get('T'): return "LIKE"
         if ext.get('I'): return "ONE"
         return "UNKNOWN"
     if count == 2 and ext.get('I') and ext.get('M'):
@@ -159,7 +158,6 @@ def classify_gesture(count, ext):
 
 _GESTURE_COLORS = {
     "FIST":    (200, 0, 255),
-    "LIKE":    (0, 200, 255),
     "ONE":     (0, 255, 255),
     "TWO":     (0, 255, 128),
     "THREE":   (0, 200, 200),
@@ -169,8 +167,8 @@ _GESTURE_COLORS = {
     "NO HAND": (80, 80, 80),
 }
 
-JOINT_LABELS = {"LIKE": "J1 rotation", "TWO": "J2 shoulder", "FOUR": "J3 elbow"}
-JOINT_COLORS = {"LIKE": (0, 200, 255), "TWO": (0, 255, 128), "FOUR": (0, 180, 255)}
+JOINT_LABELS = {"THREE": "J1 rotation", "TWO": "J2 shoulder", "FOUR": "J3 elbow"}
+JOINT_COLORS = {"THREE": (0, 200, 200), "TWO": (0, 255, 128), "FOUR": (0, 180, 255)}
 
 def draw_joystick(frame, label, px):
     h, w = frame.shape[:2]
