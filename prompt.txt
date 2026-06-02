@@ -1,24 +1,25 @@
-давай этот в robo_arm_v2.py поменяем жест управления с лайка на три пальца, уберем жест лайк. и в thor_bridge тоже правки внесем
+11venv) micola@micola:~/arducam $ python3 pi_inference.py 
+Запуск rpicam-vid (YUV420)...
+rpicam-vid запущен (640x480)
+Ждём первый кадр...
+UART: connected to Pico on /dev/serial0
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+TFLite: student_model_7kb.tflite loaded
+  Input:  [ 1 42]
+  Output: [1 8]
+Error in cpuinfo: prctl(PR_SVE_GET_VL) failed
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+W0000 00:00:1780390134.795816   30404 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1780390134.894199   30403 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+GUI mode (:0) — close window or Ctrl+C to quit
+Ready! TFLite gesture classification active.
 
-We are optimizing latency for a Thor robot arm controlled via gesture recognition.
-## Current setup
-- Raspberry Pi 4 (OV9281 camera) runs `robo_arm_v2.py` — MediaPipe gesture → UART → Pico → USB → WSL
-- WSL (Windows) runs `thor_bridge.py` — reads serial from Pico, publishes via WebSocket to rosbridge
-- Thor-ROS runs in WSL, hardware interface communicates with the real robot via usbipd (USB over IP from Windows)
-## What has been optimized already (on Pi 4 side)
-- Pico bridge: removed `time.sleep(0.005)` in code.py
-- robo_arm_v2.py: CMD_THROTTLE 0.5 → 0.15, X_THROTTLE 0.1 → 0.03, now processing every frame
-- thor_bridge.py: socket timeout 0.2 → 0.01, PUBLISH_THROTTLE 0.04 → 0.01, serial timeout 0.1 → 0.01
-- thor_bridge.py: added event-driven publishing (changed_event) — data changes trigger immediate publish instead of polling
-## Current problem
-Signals reach thor_bridge.py fast (confirmed), but the arm moves 1-3 seconds late. Commands "accumulate" — the arm jerks after a delay instead of moving immediately. The bottleneck is in the Thor-ROS → ros2_control → hardware interface → usbipd → robot path inside WSL.
-## What we need from you
-1. Find Thor-ROS config files (look in ~/Thor-ROS/ or wherever it's installed) — especially ros2_control URDF/XACRO, YAML controller configs, and the hardware interface C++ code
-2. Check what `update_rate` / `control_period` the controller runs at
-3. Check the hardware interface — how does it communicate with the robot (serial baud rate, protocol)?
-4. Check if usbipd adds significant latency
-5. Suggest changes to:
-   - Increase controller update rate 
-   - Optimize hardware interface communication
-   - Reduce any queuing/buffering between rosbridge and the robot
-Start by exploring the Thor-ROS codebase and report back what you find.
+Первый кадр получен!
+Traceback (most recent call last):
+  File "/home/micola/arducam/pi_inference.py", line 386, in <module>
+    main()
+  File "/home/micola/arducam/pi_inference.py", line 264, in main
+    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+           ^^^^^^^^^^^^^
+AttributeError: module 'cv2' has no attribute 'normalize'
