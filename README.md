@@ -54,6 +54,17 @@ pip install --upgrade pip
 pip install opencv-contrib-python==4.10.0.84 numpy==1.26.4 mediapipe==0.10.18 tflite-runtime pyserial evdev
 ```
 
+**Проверенные версии (11venv):**
+
+```
+Python:  3.11.15
+mediapipe             0.10.18
+numpy                 1.26.4
+opencv-contrib-python 4.10.0.84
+pyserial              3.5
+tflite-runtime        2.14.0
+```
+
 **Почему так:**
 - mediapipe 0.10.18 **требует** `numpy<2` и `opencv-contrib-python`
 - opencv-contrib-python 4.10 тянет numpy 1.26 — идеально

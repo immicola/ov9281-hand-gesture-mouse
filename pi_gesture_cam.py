@@ -3,8 +3,8 @@
 Pi Gesture Cam — TFLite gesture recognition on Raspberry Pi 4 + OV9281
 Захват с rpicam-vid → MediaPipe Hands (21 landmarks) → TFLite (8 классов) → вывод на экран
 
-Модель: student_model_7kb.tflite (обучена через knowledge distillation)
-Классы: None, Closed_Fist, Open_Palm, Pointing_Up, Thumb_Down, Thumb_Up, Victory, ILoveYou
+Модель: student_model_7kb.tflite
+Классы: thumbs_up, pistol, pointy, peace, 3fingers, 4fingers, open, close
 """
 
 import os
@@ -38,19 +38,19 @@ MIN_TRACKING = 0.45
 SMOOTH_FRAMES = 3           # скользящее окно для стабилизации жеста
 
 CLASSES = [
-    "None", "Closed_Fist", "Open_Palm", "Pointing_Up",
-    "Thumb_Down", "Thumb_Up", "Victory", "ILoveYou"
+    "thumbs_up", "pistol", "pointy", "peace",
+    "3fingers", "4fingers", "open", "close"
 ]
 
 GESTURE_COLORS = {
-    "None":       (128, 128, 128),
-    "Closed_Fist":(200,   0, 255),
-    "Open_Palm":  (  0, 220, 255),
-    "Pointing_Up":(  0, 180, 255),
-    "Thumb_Down": (  0,   0, 200),
-    "Thumb_Up":   (  0, 200,   0),
-    "Victory":    (  0, 255, 128),
-    "ILoveYou":   (200, 100, 200),
+    "thumbs_up": (  0, 200,   0),
+    "pistol":    (200,   0, 255),
+    "pointy":    (  0, 180, 255),
+    "peace":     (  0, 255, 128),
+    "3fingers":  (  0, 220, 255),
+    "4fingers":  (255, 180,   0),
+    "open":      (  0, 220, 255),
+    "close":     (200,   0, 255),
 }
 
 # ─── TFLite MODEL ─────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ mp_draw = mp.solutions.drawing_utils
 
 # ─── SMOOTHING ────────────────────────────────────────────────────────────────
 gesture_history = deque(maxlen=SMOOTH_FRAMES)
-stable_gesture = "None"
+stable_gesture = "No Hand"
 
 # ─── FPS COUNTER ──────────────────────────────────────────────────────────────
 frame_count = 0
@@ -187,8 +187,7 @@ while True:
         fps_timer = now
 
     # ── Convert YUV → BGR ─────────────────────────────────────────────────
-    # gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    frame = cv2.flip(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), 1)
+    frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
     # ── MediaPipe Hands ───────────────────────────────────────────────────
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -212,13 +211,12 @@ while True:
 
         # ── Smooth ────────────────────────────────────────────────────────
         gesture_history.append(label)
-        if len(gesture_history) >= SMOOTH_FRAMES and all(g == label for g in gesture_history):
-            stable_gesture = label
-        else:
-            label = stable_gesture
+        if len(gesture_history) >= SMOOTH_FRAMES:
+            stable_gesture = max(set(gesture_history), key=gesture_history.count)
+        label = stable_gesture
     else:
         gesture_history.clear()
-        stable_gesture = "None"
+        stable_gesture = "No Hand"
 
     # ─── HUD ──────────────────────────────────────────────────────────────
     h, w = frame.shape[:2]

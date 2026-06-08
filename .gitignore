@@ -42,3 +42,6 @@ camera_server.py
 gesture_client.py
 hand_gesture_ov9281
 prompt.txt
+videos/
+videos.7z
+tables.md

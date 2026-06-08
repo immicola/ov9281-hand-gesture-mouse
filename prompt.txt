@@ -1,25 +1,4 @@
-11venv) micola@micola:~/arducam $ python3 pi_inference.py 
-Запуск rpicam-vid (YUV420)...
-rpicam-vid запущен (640x480)
-Ждём первый кадр...
-UART: connected to Pico on /dev/serial0
-INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-TFLite: student_model_7kb.tflite loaded
-  Input:  [ 1 42]
-  Output: [1 8]
-Error in cpuinfo: prctl(PR_SVE_GET_VL) failed
-INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-W0000 00:00:1780390134.795816   30404 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1780390134.894199   30403 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-GUI mode (:0) — close window or Ctrl+C to quit
-Ready! TFLite gesture classification active.
-
-Первый кадр получен!
-Traceback (most recent call last):
-  File "/home/micola/arducam/pi_inference.py", line 386, in <module>
-    main()
-  File "/home/micola/arducam/pi_inference.py", line 264, in main
-    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-           ^^^^^^^^^^^^^
-AttributeError: module 'cv2' has no attribute 'normalize'
+rpicam-vid -t 60000 --output video.mp4 --codec libav \
+  --libav-format mp4 --libav-video-codec h264_v4l2m2m \
+  --width 1280 --height 720 --framerate 60 \
+  --bitrate 15000000 --intra 60

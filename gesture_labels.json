@@ -1,0 +1,10 @@
+[
+  {"file": "thumbs_up",   "gesture": "thumbs_up",   "label": 0},
+  {"file": "pistol",      "gesture": "pistol",      "label": 1},
+  {"file": "pointy",      "gesture": "pointy",      "label": 2},
+  {"file": "peace",       "gesture": "peace",       "label": 3},
+  {"file": "3fingers",    "gesture": "3fingers",    "label": 4},
+  {"file": "4fingers",    "gesture": "4fingers",    "label": 5},
+  {"file": "open",        "gesture": "open",        "label": 6},
+  {"file": "close",       "gesture": "close",       "label": 7}
+]
